@@ -7,9 +7,9 @@ services:
     startCommand: npm start
     healthCheckPath: /healthz
     envVars:
-      - key: ANTHROPIC_API_KEY
+      - key: GEMINI_API_KEY
         sync: false
-      - key: CLAUDE_MODEL
-        value: claude-sonnet-5-5
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
       - key: NODE_VERSION
         value: 20

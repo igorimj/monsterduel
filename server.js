@@ -1,15 +1,14 @@
 import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import Anthropic from '@anthropic-ai/sdk';
 import sharp from 'sharp';
 import { randomBytes } from 'crypto';
 import { fileURLToPath } from 'url';
 import path from 'path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-5-5';
-const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
+const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const API_KEY = process.env.GEMINI_API_KEY;
 
 const CAP = { C: 25, B: 50, A: 100 };
 const SK = ['atk', 'def', 'vel', 'int', 'pod'];
@@ -73,14 +72,26 @@ async function toPng(dataUrl) {
   const out = await sharp(buf, { density: 150 }).resize(384, 384, { fit: 'contain', background: '#fff' }).flatten({ background: '#fff' }).png().toBuffer();
   return out.toString('base64');
 }
-const imgBlock = (b64) => ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: b64 } });
+const imgBlock = (b64) => ({ type: 'image', data: b64 });
 const describe = (m, l) => `${l}: "${m.name}" (classe ${m.cls}, overall ${m.overall}${m.evolved ? ', EVOLUÍDO' : ''}) — pontos: ` +
   `Ataque ${m.stats.atk}, Defesa ${m.stats.def}, Velocidade ${m.stats.vel}, Inteligência ${m.stats.int}, Poder especial ${m.stats.pod}`;
 
-async function ask(content, max_tokens) {
-  if (!anthropic) throw new Error('ANTHROPIC_API_KEY não configurada no servidor');
-  const r = await anthropic.messages.create({ model: MODEL, max_tokens, messages: [{ role: 'user', content }] });
-  return r.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+// Chamada à API do Gemini (plano gratuito do Google AI Studio)
+async function ask(content, maxOut = 8192, json = false) {
+  if (!API_KEY) throw new Error('GEMINI_API_KEY não configurada no servidor');
+  const parts = content.map((b) => (b.type === 'image' ? { inline_data: { mime_type: 'image/png', data: b.data } } : { text: b.text }));
+  const body = { contents: [{ role: 'user', parts }], generationConfig: { maxOutputTokens: maxOut, ...(json ? { responseMimeType: 'application/json' } : {}) } };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': API_KEY }, body: JSON.stringify(body),
+    });
+    if (r.status === 429 && attempt < 2) { await new Promise((x) => setTimeout(x, 15000)); continue; } // limite do plano grátis: espera e tenta de novo
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(`Gemini ${r.status}: ${j.error?.message || 'erro'}`.slice(0, 300));
+    const text = (j.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
+    if (!text) throw new Error('A IA não retornou texto (' + (j.candidates?.[0]?.finishReason || j.promptFeedback?.blockReason || 'vazio') + ')');
+    return text;
+  }
 }
 
 async function runJudge(g) {
@@ -96,7 +107,7 @@ ${describe(a, 'Monstro 1')}
 ${describe(b, 'Monstro 2')}
 Avalie cada monstro de 0 a 10 nos critérios: ataque, defesa, velocidade, inteligencia, poder, aparencia (aparência/intimidação), criatividade. Use os pontos distribuídos como referência, mas interprete visualmente o desenho (garras, asas, armadura, cauda, olhos etc.). Escolha um vencedor. Depois identifique o MAIOR PONTO FORTE VISUAL do perdedor (uma característica física concreta que o vencedor possa absorver, ex.: "asas membranosas", "tentáculos", "placas de armadura").
 Responda SOMENTE JSON: {"scores":{"m1":{"ataque":0,"defesa":0,"velocidade":0,"inteligencia":0,"poder":0,"aparencia":0,"criatividade":0},"m2":{...}},"winner":"m1" ou "m2","verdict":"2-3 frases narrando o duelo em português","trait":"característica física absorvida do perdedor","traitStat":"ataque|defesa|velocidade|inteligencia|poder"}` },
-    ], 1500);
+    ], 4096, true);
     const j = JSON.parse(text.match(/\{[\s\S]*\}/)[0]);
     const w = j.winner === 'm2' ? 'p2' : 'p1', l = other(w);
     const wm = g.mons[g.choice[w]], lm = g.mons[g.choice[l]];
@@ -109,7 +120,7 @@ Responda SOMENTE JSON: {"scores":{"m1":{"ataque":0,"defesa":0,"velocidade":0,"in
         imgBlock(wb), imgBlock(lb),
         { type: 'text', text: `Redesenhe o monstro vencedor "${wm.name}" (primeira imagem) como uma EVOLUÇÃO sua, absorvendo fisicamente este traço do monstro perdedor "${lm.name}" (segunda imagem): ${res.trait}. Mantenha a identidade, cores e pose do vencedor e incorpore visivelmente o traço, deixando o monstro mais poderoso e imponente. Se o vencedor já tiver traços absorvidos antes, preserve-os.
 Responda SOMENTE com um SVG válido: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 360">, fundo branco (um rect), formas simples (path, ellipse, circle, polygon, gradientes), sem scripts, sem imagens externas, sem texto, no máximo 9000 caracteres.` },
-      ], 6000);
+      ], 8192);
       const mt = out.match(/<svg[\s\S]*<\/svg>/i);
       let img = wm.img;
       if (mt) {
@@ -204,4 +215,4 @@ setInterval(() => { // limpa salas inativas (6h)
 }, 600e3);
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Monster Duel em http://localhost:${PORT} (modelo: ${MODEL}, IA: ${anthropic ? 'ok' : 'SEM CHAVE'})`));
+server.listen(PORT, () => console.log(`Monster Duel em http://localhost:${PORT} (modelo: ${MODEL}, IA: ${API_KEY ? 'ok' : 'SEM CHAVE'})`));

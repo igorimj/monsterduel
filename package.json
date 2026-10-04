@@ -1,13 +1,12 @@
 {
   "name": "monster-duel",
   "version": "1.0.0",
-  "description": "Jogo multiplayer de duelos de monstros desenhados, julgados e evoluídos por IA (Claude).",
+  "description": "Jogo multiplayer de duelos de monstros desenhados, julgados e evoluídos por IA (Gemini).",
   "type": "module",
   "main": "server.js",
   "scripts": { "start": "node server.js", "dev": "node --watch server.js" },
   "engines": { "node": ">=20" },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.40.0",
     "express": "^4.19.2",
     "sharp": "^0.33.5",
     "ws": "^8.18.0"
